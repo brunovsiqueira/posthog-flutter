@@ -9,6 +9,25 @@ import 'chunk_ids.dart';
 typedef ChunkIdMapType = Map<String, String>;
 
 class DartExceptionProcessor {
+  // Regex patterns for non-symbolic/DWARF stack traces
+  // (produced by --split-debug-info and/or --obfuscate builds)
+
+  /// Matches the crash banner header that signals a non-symbolic stack trace
+  static final _nonSymbolicHeaderRegex = RegExp(
+    r'\*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\* \*\*\*',
+  );
+
+  /// Matches `build_id: '<hex>'` in the stack trace header
+  static final _buildIdRegex = RegExp(r"build_id[:=]\s*'([A-Fa-f0-9]+)'");
+
+  /// Matches `isolate_dso_base: <hex>` in the stack trace header
+  static final _isolateDsoBaseRegex =
+      RegExp(r'isolate_dso_base[:=]\s*([A-Fa-f0-9]+)');
+
+  /// Matches a frame line: `#00 abs <hex> [virt <hex>] <symbol+offset>`
+  static final _frameLineRegex =
+      RegExp(r'^\s*#(\d+)\s+abs\s+([A-Fa-f0-9]+)');
+
   /// Converts Dart error/exception and stack trace to PostHog exception format
   static Map<String, dynamic> processException({
     required Object error,
@@ -131,6 +150,16 @@ class DartExceptionProcessor {
     bool inAppByDefault = true,
     bool removeTopPostHogFrames = false,
   }) {
+    // Check for non-symbolic stack traces (from --split-debug-info builds).
+    // These contain raw instruction addresses instead of file/line info and
+    // cannot be parsed by Chain.forTrace().
+    if (!kIsWeb) {
+      final rawString = stackTrace.toString();
+      if (_isNonSymbolicStackTrace(rawString)) {
+        return _parseNonSymbolicStackTrace(rawString);
+      }
+    }
+
     final chain = Chain.forTrace(stackTrace);
     final frames = <Map<String, dynamic>>[];
     final chunkIdMap = getPosthogChunkIds() ?? {};
@@ -232,6 +261,63 @@ class DartExceptionProcessor {
     }
 
     return frameData;
+  }
+
+  /// Checks if a stack trace is in non-symbolic/DWARF format.
+  ///
+  /// Non-symbolic stack traces are produced when building with
+  /// `--split-debug-info` (with or without `--obfuscate`). They contain
+  /// raw instruction addresses instead of symbolic file/line information.
+  ///
+  /// Format reference:
+  /// https://github.com/dart-lang/sdk/blob/main/pkg/native_stack_traces/lib/src/convert.dart
+  static bool _isNonSymbolicStackTrace(String rawTrace) {
+    return _nonSymbolicHeaderRegex.hasMatch(rawTrace) ||
+        _frameLineRegex.hasMatch(rawTrace);
+  }
+
+  /// Parses a non-symbolic stack trace into PostHog format.
+  ///
+  /// Extracts `build_id` and `isolate_dso_base` from the header, and
+  /// `instruction_addr` from each frame line. These fields allow server-side
+  /// symbolication once Dart symbol resolution is supported in Cymbal.
+  ///
+  /// Note: Deferred loading units are not yet handled — all frames use the
+  /// main isolate's `build_id` and `isolate_dso_base`.
+  static List<Map<String, dynamic>> _parseNonSymbolicStackTrace(
+      String rawTrace) {
+    final buildId = _buildIdRegex.firstMatch(rawTrace)?.group(1);
+    final dsoBase = _isolateDsoBaseRegex.firstMatch(rawTrace)?.group(1);
+    final imageAddr = dsoBase != null ? '0x$dsoBase' : null;
+
+    final frames = <Map<String, dynamic>>[];
+
+    for (final line in rawTrace.split('\n')) {
+      final match = _frameLineRegex.firstMatch(line);
+      if (match == null) continue;
+
+      final absAddr = match.group(2)!;
+      final instructionAddr = '0x$absAddr';
+
+      final frameData = <String, dynamic>{
+        'platform': 'dart',
+        'abs_path': instructionAddr,
+        'instruction_addr': instructionAddr,
+        'in_app': true,
+      };
+
+      if (buildId != null) {
+        frameData['build_id'] = buildId;
+      }
+
+      if (imageAddr != null) {
+        frameData['image_addr'] = imageAddr;
+      }
+
+      frames.add(frameData);
+    }
+
+    return frames;
   }
 
   /// Determines if a frame is considered in-app

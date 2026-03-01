@@ -528,6 +528,234 @@ void main() {
           (exceptionData['stacktrace']['frames'] as List).isNotEmpty, isTrue);
     });
 
+    group('non-symbolic stack traces (--split-debug-info)', () {
+      // Simulates an Android ARM64 obfuscated stack trace
+      const androidArm64Trace = '''
+Warning: This VM has been configured to produce stack traces that violate the Dart standard.
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 29278, tid: 29340, name 1.ui
+build_id: 'f84eca6467890839d0b53ac1f77e147b'
+isolate_dso_base: 6fe9d64000, vm_dso_base: 6fe9d64000
+isolate_instructions: 6fe9d74000, vm_instructions: 6fe9d66000
+    #00 abs 0000006fe9f4e87b virt 00000000001ea87b _kDartIsolateSnapshotInstructions+0x1da87b
+    #01 abs 0000006fe9f5152f virt 00000000001ed52f _kDartIsolateSnapshotInstructions+0x1dd52f
+    #02 abs 0000006fea080493 virt 00000000003bc493 _kDartIsolateSnapshotInstructions+0x30c493
+''';
+
+      // Android ARM32 format
+      const androidArm32Trace = '''
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 28496, tid: 28600, name 1.ui
+build_id: 'abcdef0123456789abcdef0123456789'
+isolate_dso_base: c0ec6000, vm_dso_base: c0ec6000
+isolate_instructions: c11ea6c0, vm_instructions: c11e6000
+    #00 abs c11ebb0b virt 00325b0b _kDartIsolateSnapshotInstructions+0x144b
+    #01 abs c11eb777 virt 00325777 _kDartIsolateSnapshotInstructions+0x10b7
+''';
+
+      // Trace without build_id (older SDK or iOS Mach-O assembly)
+      const traceWithoutBuildId = '''
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 14175, tid: 6099480576, name io.flutter.1.ui
+os: ios arch: arm64 comp: no sim: no
+isolate_dso_base: 111f84000, vm_dso_base: 111f84000
+isolate_instructions: 111f914c0, vm_instructions: 111f8b9c0
+    #00 abs 00000001128bfb9f _kDartIsolateSnapshotInstructions+0x92e6df
+    #01 abs 00000001128bf800 _kDartIsolateSnapshotInstructions+0x92e340
+''';
+
+      test('detects non-symbolic stack trace and parses frames', () {
+        final exception = Exception('Obfuscated crash');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final exceptionData =
+            result['\$exception_list'] as List<Map<String, dynamic>>;
+        final stackTraceData =
+            exceptionData.first['stacktrace'] as Map<String, dynamic>;
+        final frames =
+            stackTraceData['frames'] as List<Map<String, dynamic>>;
+
+        expect(frames, hasLength(3));
+        expect(stackTraceData['type'], equals('raw'));
+      });
+
+      test('extracts instruction_addr from each frame', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        expect(frames[0]['instruction_addr'], equals('0x0000006fe9f4e87b'));
+        expect(frames[1]['instruction_addr'], equals('0x0000006fe9f5152f'));
+        expect(frames[2]['instruction_addr'], equals('0x0000006fea080493'));
+      });
+
+      test('extracts build_id and image_addr from header', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        for (final frame in frames) {
+          expect(frame['build_id'],
+              equals('f84eca6467890839d0b53ac1f77e147b'));
+          expect(frame['image_addr'], equals('0x6fe9d64000'));
+        }
+      });
+
+      test('sets platform to dart and in_app to true', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        for (final frame in frames) {
+          expect(frame['platform'], equals('dart'));
+          expect(frame['in_app'], isTrue);
+        }
+      });
+
+      test('uses instruction_addr as abs_path', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        expect(frames[0]['abs_path'], equals('0x0000006fe9f4e87b'));
+        expect(frames[0]['abs_path'], equals(frames[0]['instruction_addr']));
+      });
+
+      test('handles 32-bit addresses (ARM32)', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm32Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        expect(frames, hasLength(2));
+        expect(frames[0]['instruction_addr'], equals('0xc11ebb0b'));
+        expect(frames[1]['instruction_addr'], equals('0xc11eb777'));
+        expect(frames[0]['image_addr'], equals('0xc0ec6000'));
+        expect(
+            frames[0]['build_id'], equals('abcdef0123456789abcdef0123456789'));
+      });
+
+      test('handles missing build_id gracefully', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(traceWithoutBuildId);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        expect(frames, hasLength(2));
+        expect(frames[0]['instruction_addr'], equals('0x00000001128bfb9f'));
+        expect(frames[0].containsKey('build_id'), isFalse);
+        expect(frames[0]['image_addr'], equals('0x111f84000'));
+      });
+
+      test('preserves exception metadata with non-symbolic traces', () {
+        final originalError = StateError('crash in obfuscated build');
+        final wrappedError = PostHogException(
+          source: originalError,
+          mechanism: 'FlutterError',
+          handled: false,
+        );
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: wrappedError,
+          stackTrace: stackTrace,
+        );
+
+        final exceptionData =
+            (result['\$exception_list'] as List).first as Map<String, dynamic>;
+
+        expect(exceptionData['type'], equals('StateError'));
+        expect(exceptionData['value'],
+            equals('Bad state: crash in obfuscated build'));
+        expect(exceptionData['mechanism']['type'], equals('FlutterError'));
+        expect(exceptionData['mechanism']['handled'], isFalse);
+        expect(exceptionData['mechanism']['synthetic'], isFalse);
+      });
+
+      test('does not have lineno, colno, function, filename, or package', () {
+        final exception = Exception('test');
+        final stackTrace = StackTrace.fromString(androidArm64Trace);
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        for (final frame in frames) {
+          expect(frame.containsKey('lineno'), isFalse);
+          expect(frame.containsKey('colno'), isFalse);
+          expect(frame.containsKey('function'), isFalse);
+          expect(frame.containsKey('filename'), isFalse);
+          expect(frame.containsKey('package'), isFalse);
+        }
+      });
+
+      test('normal symbolic traces still use Chain.forTrace() path', () {
+        final exception = Exception('Normal exception');
+        final stackTrace = StackTrace.fromString('''
+#0      main (package:my_app/main.dart:25:7)
+#1      helper (package:third_party/helper.dart:10:5)
+''');
+
+        final result = DartExceptionProcessor.processException(
+          error: exception,
+          stackTrace: stackTrace,
+        );
+
+        final frames = _extractFrames(result);
+
+        // Should have symbolic info (package, filename, lineno)
+        expect(frames[0]['package'], equals('my_app'));
+        expect(frames[0]['filename'], equals('main.dart'));
+        expect(frames[0]['lineno'], equals(25));
+        // Should NOT have non-symbolic fields
+        expect(frames[0].containsKey('instruction_addr'), isFalse);
+        expect(frames[0].containsKey('build_id'), isFalse);
+        expect(frames[0].containsKey('image_addr'), isFalse);
+      });
+    });
+
     test('processes original error type correctly when wrapped', () {
       final testErrorTypes = [
         Exception('Test exception'),
@@ -563,6 +791,14 @@ void main() {
       }
     });
   });
+}
+
+/// Extracts frames from a processException result
+List<Map<String, dynamic>> _extractFrames(Map<String, dynamic> result) {
+  final exceptionData =
+      result['\$exception_list'] as List<Map<String, dynamic>>;
+  return exceptionData.first['stacktrace']['frames']
+      as List<Map<String, dynamic>>;
 }
 
 // Helper functions to generate async stack traces for testing
