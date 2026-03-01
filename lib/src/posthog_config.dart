@@ -186,11 +186,20 @@ class PostHogSessionReplayConfig {
   /// Defaults to 1s.
   var throttleDelay = const Duration(seconds: 1);
 
+  /// Enable network telemetry capture during session replay.
+  ///
+  /// When enabled, HTTP requests made through [PostHogHttpClient] will be
+  /// captured and displayed in the session replay network tab.
+  ///
+  /// Default: true (capture is still gated on session replay being active).
+  var captureNetworkTelemetry = true;
+
   Map<String, dynamic> toMap() {
     return {
       'maskAllImages': maskAllImages,
       'maskAllTexts': maskAllTexts,
       'throttleDelayMs': throttleDelay.inMilliseconds,
+      'captureNetworkTelemetry': captureNetworkTelemetry,
     };
   }
 }

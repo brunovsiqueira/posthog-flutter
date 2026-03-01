@@ -5,6 +5,7 @@ import com.posthog.android.internal.base64
 import com.posthog.internal.replay.RREvent
 import com.posthog.internal.replay.RRFullSnapshotEvent
 import com.posthog.internal.replay.RRMetaEvent
+import com.posthog.internal.replay.RRPluginEvent
 import com.posthog.internal.replay.RRStyle
 import com.posthog.internal.replay.RRWireframe
 import com.posthog.internal.replay.capture
@@ -40,6 +41,15 @@ class SnapshotSender {
             )
 
         listOf(snapshotEvent).capture()
+    }
+
+    fun sendNetworkEvent(requestData: Map<String, Any>) {
+        val payload = mapOf("requests" to listOf(requestData))
+        val timestamp = (requestData["timestamp"] as? Number)?.toLong()
+            ?: System.currentTimeMillis()
+
+        val event = RRPluginEvent("rrweb/network@1", payload, timestamp)
+        listOf(event).capture()
     }
 
     fun sendMetaEvent(

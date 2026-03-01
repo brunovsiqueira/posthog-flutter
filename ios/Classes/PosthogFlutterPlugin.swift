@@ -221,6 +221,8 @@ public class PosthogFlutterPlugin: NSObject, FlutterPlugin {
             captureException(call, result: result)
         case "close":
             close(result)
+        case "sendNetworkEvent":
+            sendNetworkEvent(call, result: result)
         case "sendMetaEvent":
             sendMetaEvent(call, result: result)
         case "sendFullSnapshot":
@@ -359,6 +361,40 @@ public class PosthogFlutterPlugin: NSObject, FlutterPlugin {
 #endif
 
 extension PosthogFlutterPlugin {
+    private func sendNetworkEvent(_ call: FlutterMethodCall,
+                                   result: @escaping FlutterResult)
+    {
+        #if os(iOS)
+            if let args = call.arguments as? [String: Any] {
+                let timestamp = args["timestamp"] as? Int ?? Int(Date().timeIntervalSince1970 * 1000)
+
+                let pluginData: [String: Any] = [
+                    "plugin": "rrweb/network@1",
+                    "payload": ["requests": [args]],
+                ]
+                let snapshotData: [String: Any] = [
+                    "type": 6,
+                    "data": pluginData,
+                    "timestamp": timestamp,
+                ]
+
+                dispatchQueue.async {
+                    let properties: [String: Any] = [
+                        "$snapshot_source": "mobile",
+                        "$snapshot_data": [snapshotData],
+                    ]
+                    PostHogSDK.shared.capture("$snapshot", properties: properties)
+                }
+
+                result(nil)
+            } else {
+                _badArgumentError(result)
+            }
+        #else
+            result(nil)
+        #endif
+    }
+
     private func sendMetaEvent(_ call: FlutterMethodCall,
                                result: @escaping FlutterResult)
     {

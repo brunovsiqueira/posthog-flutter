@@ -172,6 +172,9 @@ class PosthogFlutterPlugin :
             "close" -> {
                 close(result)
             }
+            "sendNetworkEvent" -> {
+                handleSendNetworkEvent(call, result)
+            }
             "sendMetaEvent" -> {
                 handleMetaEvent(call, result)
             }
@@ -216,6 +219,24 @@ class PosthogFlutterPlugin :
     private fun stopSessionRecording(result: Result) {
         PostHog.stopSessionReplay()
         result.success(null)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleSendNetworkEvent(
+        call: MethodCall,
+        result: Result,
+    ) {
+        try {
+            val requestData = call.arguments as? Map<String, Any>
+            if (requestData != null) {
+                snapshotSender.sendNetworkEvent(requestData)
+                result.success(null)
+            } else {
+                result.error("INVALID_ARGUMENT", "Request data is null", null)
+            }
+        } catch (e: Throwable) {
+            result.error("PosthogFlutterException", e.localizedMessage, null)
+        }
     }
 
     private fun handleMetaEvent(

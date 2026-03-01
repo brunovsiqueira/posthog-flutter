@@ -34,6 +34,14 @@ class NativeCommunicator {
     }
   }
 
+  Future<void> sendNetworkEvent(Map<String, dynamic> requestData) async {
+    try {
+      await _channel.invokeMethod('sendNetworkEvent', requestData);
+    } catch (e) {
+      printIfDebug('Error sending network event to native: $e');
+    }
+  }
+
   Future<bool> isSessionReplayActive() async {
     if (kIsWeb) {
       // Flutter doesn't capture screenshots on web, JS SDK handles session replay
