@@ -25,6 +25,18 @@ class PostHogConfig {
   var preloadFeatureFlags = true;
   var captureApplicationLifecycleEvents = false;
 
+  /// Enable Dart-side feature flag cache for synchronous reads.
+  ///
+  /// When `false` (default), feature flags are managed entirely by the native
+  /// iOS/Android SDK. The sync methods ([Posthog.isFeatureEnabledSync],
+  /// [Posthog.getFeatureFlagSync], etc.) will return `false`/`null`/`{}`.
+  ///
+  /// When `true`, the SDK fetches flags via a Dart HTTP call and caches them
+  /// locally. This enables synchronous reads from the Dart-side cache, and
+  /// the async feature flag methods also read from this cache. The native
+  /// SDK's own flag fetching is suppressed to avoid duplicate HTTP calls.
+  var enableSyncFeatureFlags = false;
+
   var debug = false;
   var optOut = false;
   var personProfiles = PostHogPersonProfiles.identifiedOnly;
@@ -61,6 +73,13 @@ class PostHogConfig {
   /// Use [Posthog.getFeatureFlag] or [Posthog.isFeatureEnabled] within this
   /// callback to access the loaded flag values.
   OnFeatureFlagsCallback? onFeatureFlags;
+
+  /// Callback to be invoked when feature flags are loaded, receiving the
+  /// full flag data as a map.
+  ///
+  /// You can also use [Posthog.isFeatureEnabledSync] or
+  /// [Posthog.getFeatureFlagSync] to read flag values synchronously.
+  OnFeatureFlagsLoadedCallback? onFeatureFlagsLoaded;
 
   /// Callbacks to intercept and modify events before they are sent to PostHog.
   ///
@@ -186,11 +205,17 @@ class PostHogSessionReplayConfig {
   /// Defaults to 1s.
   var throttleDelay = const Duration(seconds: 1);
 
+  /// Session replay sample rate between 0 and 1.
+  /// Local config has precedence over remote config when both are set.
+  /// If null, sampling is controlled by remote config (when available).
+  double? sampleRate;
+
   Map<String, dynamic> toMap() {
     return {
       'maskAllImages': maskAllImages,
       'maskAllTexts': maskAllTexts,
       'throttleDelayMs': throttleDelay.inMilliseconds,
+      if (sampleRate != null) 'sampleRate': sampleRate,
     };
   }
 }
